@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Nexus Pulse — Audio Visualizer</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;overflow:hidden;background:#0b1220;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#f8fafc}
+
+  #stage{position:fixed;inset:0;display:block;background:#05070f}
+
+  /* ---- Top bar ---- */
+  #topbar{position:fixed;top:0;left:0;right:0;padding:12px 14px;display:flex;align-items:center;gap:10px;z-index:20;
+    background:linear-gradient(180deg,rgba(11,18,32,.9),rgba(11,18,32,0));pointer-events:none}
+  #logo{font-size:15px;font-weight:700;letter-spacing:.5px;pointer-events:auto;
+    background:linear-gradient(90deg,#38bdf8,#a855f7,#ec4899);-webkit-background-clip:text;background-clip:text;color:transparent}
+  #logo span{font-size:11px;font-weight:500;color:#64748b;-webkit-text-fill-color:#64748b;margin-left:6px}
+  #status{margin-left:auto;font-size:11px;color:#94a3b8;pointer-events:auto;display:flex;align-items:center;gap:6px}
+  #dot{width:8px;height:8px;border-radius:50%;background:#ef4444;box-shadow:0 0 8px #ef4444}
+  #dot.on{background:#22c55e;box-shadow:0 0 8px #22c55e}
+
+  /* ---- Overlay start screen ---- */
+  #overlay{position:fixed;inset:0;z-index:40;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;
+    background:radial-gradient(circle at 50% 40%,#111a2e 0%,#05070f 70%);text-align:center;padding:24px}
+  #overlay h1{font-size:30px;font-weight:800;letter-spacing:-.5px;
+    background:linear-gradient(90deg,#38bdf8,#a855f7,#ec4899);-webkit-background-clip:text;background-clip:text;color:transparent}
+  #overlay p{font-size:14px;color:#94a3b8;max-width:320px;line-height:1.5}
+  #startBtn{min-width:220px;min-height:56px;border:none;border-radius:16px;font-size:17px;font-weight:700;color:#05070f;cursor:pointer;
+    background:linear-gradient(135deg,#38bdf8,#a855f7);box-shadow:0 0 24px rgba(56,189,248,.5);transition:transform .12s}
+  #startBtn:active{transform:scale(.95)}
+  #hint{font-size:11px;color:#475569}
+
+  /* ---- Bottom control dock ---- */
+  #dock{position:fixed;bottom:0;left:0;right:0;z-index:20;padding:10px 10px calc(10px + env(safe-area-inset-bottom));
+    background:linear-gradient(0deg,rgba(11,18,32,.95),rgba(11,18,32,0))}
+  #modes{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:8px}
+  .mode{min-height:40px;padding:0 14px;border-radius:20px;border:1px solid #334155;background:rgba(30,41,59,.7);
+    color:#94a3b8;font-size:12.5px;font-weight:600;cursor:pointer;backdrop-filter:blur(8px);transition:all .15s;white-space:nowrap}
+  .mode.active{border-color:#38bdf8;color:#38bdf8;background:rgba(56,189,248,.14);box-shadow:0 0 14px rgba(56,189,248,.4)}
+  #toggles{display:flex;gap:8px;justify-content:center}
+  .tog{min-height:40px;min-width:64px;padding:0 12px;border-radius:12px;border:1px solid #334155;background:rgba(30,41,59,.7);
+    color:#94a3b8;font-size:12px;font-weight:600;cursor:pointer;backdrop-filter:blur(8px);transition:all .15s}
+  .tog.on{border-color:#22c55e;color:#22c55e;background:rgba(34,197,94,.14)}
+  #vol{display:flex;align-items:center;gap:8px;justify-content:center;margin-top:8px;color:#64748b;font-size:11px}
+  #vol input{width:180px;accent-color:#a855f7;height:22px}
+
+  @media(max-width:820px){#overlay h1{font-size:24px}#modes .mode{font-size:11.5px;padding:0 11px}}
+</style>
+</head>
+<body>
+
+<canvas id="stage"></canvas>
+
+<div id="topbar">
+  <div id="logo">NEXUS PULSE<span>mic visualizer</span></div>
+  <div id="status"><div id="dot"></div><span id="statusTxt">offline</span></div>
+</div>
+
+<div id="overlay">
+  <h1>NEXUS PULSE</h1>
+  <p>Um visualizador que reage ao som ao seu redor. Ligue o microfone e faça barulho. 🎤✨</p>
+  <button id="startBtn">▶ LIGAR MICROFONE</button>
+  <div id="hint">Funciona melhor com música tocando perto do celular</div>
+</div>
+
+<div id="dock">
+  <div id="modes"></div>
+  <div id="toggles">
+    <button class="tog on" id="liteTog">⚡ Lite</button>
+    <button class="tog" id="trailTog">🌀 Trail</button>
+    <button class="tog" id="mirrorTog">🪞 Mirror</button>
+  </div>
+  <div id="vol"><span>🔈</span><input type="range" id="sens" min="1" max="12" step="0.5" value="5"><span>🔊 sens</span></div>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+/* ============ CANVAS SETUP ============ */
+var stage=document.getElementById('stage');
+var ctx=stage.getContext('2d');
+var W=0,H=0,DPR=1;
+var isMobile=window.innerWidth<820 || (navigator.hardwareConcurrency&&navigator.hardwareConcurrency<=4);
+
+function resize(){
+  W=window.innerWidth; H=window.innerHeight;
+  DPR=isMobile?Math.min(window.devicePixelRatio||1,1.5):Math.min(window.devicePixelRatio||1,2);
+  stage.width=Math.floor(W*DPR); stage.height=Math.floor(H*DPR);
+  stage.style.width=W+'px'; stage.style.height=H+'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+window.addEventListener('resize',resize);
+window.addEventListener('orientationchange',function(){setTimeout(resize,200);});
+resize();
+
+/* ============ STATE ============ */
+var LITE=isMobile;        // auto-lite on mobile
+var TRAIL=false;
+var MIRROR=true;
+var SENS=5;
+var MODE='bars';
+var MODES=[
+  {id:'bars',  label:'Barras'},
+  {id:'wave',  label:'Onda'},
+  {id:'radial',label:'Radial'},
+  {id:'orbit', label:'Orbita'},
+  {id:'particles',label:'Particulas'}
+];
+var running=false;
+
+/* ============ AUDIO ============ */
+var audioCtx=null, analyser=null, srcNode=null, freqData=null, timeData=null, stream=null;
+var SMOOTH_BINS=96;   // how many bins we actually use
+var smooth=new Float32Array(SMOOTH_BINS);
+
+function setupAudio(){
+  audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+  if(!analyser){
+    analyser=audioCtx.createAnalyser();
+    analyser.fftSize=1024;
+    analyser.smoothingTimeConstant=LITE?0.75:0.82;
+    freqData=new Uint8Array(analyser.frequencyBinCount);
+    timeData=new Uint8Array(analyser.fftSize);
+  }
+}
+
+function startMic(){
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    alert('Seu navegador nao suporta microfone. Tente no Chrome/Safari atualizado.');
+    return;
+  }
+  navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}})
+  .then(function(s){
+    stream=s;
+    setupAudio();
+    srcNode=audioCtx.createMediaStreamSource(s);
+    srcNode.connect(analyser);
+    if(audioCtx.state==='suspended'){audioCtx.resume();}
+    running=true;
+    document.getElementById('overlay').style.display='none';
+    document.getElementById('dot').className='on';
+    document.getElementById('statusTxt').textContent='ao vivo';
+    loop(performance.now());
+  })
+  .catch(function(err){
+    document.getElementById('hint').textContent='Falha no mic: '+err.name+' — permita o acesso e recarregue.';
+    document.getElementById('hint').style.color='#f87171';
+  });
+}
+
+/* ============ SMOOTH SPECTRUM ============ */
+function updateSmooth(){
+  var bins=analyser.frequencyBinCount;              // 512
+  var usable=Math.floor(bins*0.55);                 // ignore high hiss
+  var step=Math.floor(usable/SMOOTH_BINS)||1;
+  for(var i=0;i<SMOOTH_BINS;i++){
+    var a=i*step, sum=0, n=0;
+    for(var j=0;j<step;j++){ var v=freqData[a+j]; if(v!==undefined){sum+=v;n++;} }
+    var val=n?sum/n:0;
+    val=Math.min(255, val*(SENS/5));                 // sensitivity
+    smooth[i]+= (val-smooth[i])*0.45;                // temporal smoothing
+  }
+}
+
+/* ============ COLOR HELPERS (flat, cheap) ============ */
+var PALETTE=['#38bdf8','#22d3ee','#a855f7','#ec4899','#f472b6','#60a5fa','#818cf8'];
+function colFor(i,max){ return PALETTE[Math.floor(i/max*PALETTE.length)%PALETTE.length]; }
+
+/* ============ RENDERERS ============ */
+function drawBars(){
+  var n=SMOOTH_BINS, gap=LITE?2:3;
+  var bw=(W-gap*(n+1))/n;
+  for(var i=0;i<n;i++){
+    var h=(smooth[i]/255)*(H*(MIRROR?0.42:0.82));
+    var c=colFor(i,n);
+    ctx.fillStyle=c;
+    ctx.fillRect(gap+i*(bw+gap), H-h, bw, h);
+    if(MIRROR){ ctx.fillRect(gap+i*(bw+gap), 0, bw, h*0.7); }
+  }
+}
+
+function drawWave(){
+  ctx.lineWidth=LITE?2:3;
+  ctx.strokeStyle='#38bdf8';
+  if(!LITE){ctx.shadowBlur=12;ctx.shadowColor='#38bdf8';}
+  var mid=H/2, amp=H*0.32;
+  ctx.beginPath();
+  var n=timeData.length, stepN=LITE?4:2;
+  for(var i=0;i<n;i+=stepN){
+    var x=(i/n)*W;
+    var y=mid+((timeData[i]-128)/128)*amp*(MIRROR?1:0.9);
+    if(i===0)ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+  if(!LITE){ctx.shadowBlur=0;}
+  if(MIRROR){
+    ctx.globalAlpha=0.35;
+    ctx.strokeStyle='#a855f7';
+    if(!LITE){ctx.shadowBlur=10;ctx.shadowColor='#a855f7';}
+    ctx.beginPath();
+    for(var k=0;k<n;k+=stepN){
+      var x2=(k/n)*W;
+      var y2=mid+((timeData[n-1-k]-128)/128)*amp;
+      if(k===0)ctx.moveTo(x2,y2); else ctx.lineTo(x2,y2);
+    }
+    ctx.stroke();
+    if(!LITE){ctx.shadowBlur=0;}
+    ctx.globalAlpha=1;
+  }
+}
+
+function drawRadial(){
+  var cx=W/2, cy=H/2;
+  var base=Math.min(W,H)*0.13;
+  var n=SMOOTH_BINS;
+  for(var i=0;i<n;i++){
+    var a=(i/n)*Math.PI*2 - Math.PI/2;
+    var len=base+(smooth[i]/255)*base*3.2;
+    var x1=cx+Math.cos(a)*base, y1=cy+Math.sin(a)*base;
+    var x2=cx+Math.cos(a)*len, y2=cy+Math.sin(a)*len;
+    ctx.strokeStyle=colFor(i,n);
+    ctx.lineWidth=LITE?2.5:3.5;
+    ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+  }
+  // inner pulse core
+  var avg=0; for(var j=0;j<n;j++)avg+=smooth[j]; avg/=n;
+  var r=base*0.45+(avg/255)*base*0.6;
+  ctx.beginPath();ctx.arc(cx,cy,r,0,Math.PI*2);
+  ctx.fillStyle='#0b1220';ctx.fill();
+  ctx.lineWidth=2;ctx.strokeStyle='#22d3ee';ctx.stroke();
+}
+
+var orbitAngle=0;
+function drawOrbit(){
+  var cx=W/2, cy=H/2;
+  var R=Math.min(W,H)*0.22;
+  orbitAngle+=0.012+(TRAIL?0.004:0);
+  var n=Math.min(SMOOTH_BINS,48);
+  for(var i=0;i<n;i++){
+    var a=orbitAngle+(i/n)*Math.PI*2;
+    var amp=smooth[i]/255;
+    var rr=R+amp*R*0.9;
+    var x=cx+Math.cos(a)*rr, y=cy+Math.sin(a)*rr;
+    var s=2+amp*(LITE?8:14);
+    ctx.fillStyle=colFor(i,n);
+    ctx.beginPath();ctx.arc(x,y,s,0,Math.PI*2);ctx.fill();
+  }
+  var avg=0;for(var j=0;j<n;j++)avg+=smooth[j];avg/=n;
+  ctx.beginPath();ctx.arc(cx,cy,R*0.35+(avg/255)*R*0.5,0,Math.PI*2);
+  ctx.fillStyle='#05070f';ctx.fill();
+  ctx.lineWidth=2;ctx.strokeStyle='#ec4899';ctx.stroke();
+}
+
+var parts=[];
+function drawParticles(){
+  var cx=W/2, cy=H*0.62;
+  var avg=0;for(var i=0;i<SMOOTH_BINS;i++)avg+=smooth[i];avg/=SMOOTH_BINS;
+  var energy=Math.pow(avg/255,1.4);
+  var spawn=LITE?Math.round(energy*7):Math.round(energy*16);
+  var maxP=LITE?260:650;
+  for(var s=0;s<spawn;s++){
+    if(parts.length>=maxP)break;
+    var ang=Math.random()*Math.PI*2;
+    var spd=1+Math.random()*4*(1+energy*3);
+    parts.push({x:cx,y:cy,vx:Math.cos(ang)*spd,vy:Math.sin(ang)*spd-1.2,life:1,c:colFor(Math.floor(Math.random()*SMOOTH_BINS),SMOOTH_BINS),sz:1.5+Math.random()*2.5});
+  }
+  // core glow ring
+  ctx.beginPath();ctx.arc(cx,cy,6+energy*22,0,Math.PI*2);
+  ctx.fillStyle='rgba(168,85,247,'+(0.25+energy*0.5)+')';ctx.fill();
+
+  for(var p=parts.length-1;p>=0;p--){
+    var pt=parts[p];
+    pt.x+=pt.vx; pt.y+=pt.vy; pt.vy+=0.06; pt.vx*=0.99; pt.vy*=0.99;
+    pt.life-=0.016;
+    if(pt.life<=0||pt.y>H+20||pt.x<-20||pt.x>W+20){parts.splice(p,1);continue;}
+    ctx.globalAlpha=Math.max(0,pt.life)*0.9;
+    ctx.fillStyle=pt.c;
+    ctx.fillRect(pt.x,pt.y,pt.sz,pt.sz);
+  }
+  ctx.globalAlpha=1;
+}
+
+/* ============ LOOP (throttled on mobile) ============ */
+var lastT=0, accum=0;
+var FRAME_MS=isMobile?33:1000/60;   // 30fps mobile / 60 desktop
+function loop(t){
+  if(!running)return;
+  requestAnimationFrame(loop);
+  var dt=t-lastT; lastT=t;
+  if(dt<FRAME_MS)return;
+  accum=0;
+
+  if(!LITE&&!TRAIL){ ctx.clearRect(0,0,W,H); }
+  else if(TRAIL){ ctx.fillStyle='rgba(5,7,15,0.14)'; ctx.fillRect(0,0,W,H); }
+  else { ctx.fillStyle='#05070f'; ctx.fillRect(0,0,W,H); }
+
+  analyser.getByteFrequencyData(freqData);
+  analyser.getByteTimeDomainData(timeData);
+  updateSmooth();
+
+  if(MODE==='bars')drawBars();
+  else if(MODE==='wave')drawWave();
+  else if(MODE==='radial')drawRadial();
+  else if(MODE==='orbit')drawOrbit();
+  else drawParticles();
+}
+
+/* ============ UI WIRING ============ */
+var modesEl=document.getElementById('modes');
+MODES.forEach(function(m){
+  var b=document.createElement('button');
+  b.className='mode'+(m.id==='bars'?' active':'');
+  b.textContent=m.label; b.dataset.id=m.id;
+  b.addEventListener('click',function(){
+    MODE=m.id;
+    var all=modesEl.querySelectorAll('.mode');
+    for(var i=0;i<all.length;i++)all[i].classList.remove('active');
+    b.classList.add('active');
+    parts=[];
+    ctx.fillStyle='#05070f';ctx.fillRect(0,0,W,H);
+  });
+  modesEl.appendChild(b);
+});
+
+document.getElementById('startBtn').addEventListener('click',startMic);
+
+document.getElementById('liteTog').addEventListener('click',function(){
+  LITE=!LITE;
+  this.classList.toggle('on',LITE);
+  if(analyser)analyser.smoothingTimeConstant=LITE?0.75:0.82;
+});
+document.getElementById('trailTog').addEventListener('click',function(){
+  TRAIL=!TRAIL;
+  this.classList.toggle('on',TRAIL);
+});
+document.getElementById('mirrorTog').addEventListener('click',function(){
+  MIRROR=!MIRROR;
+  this.classList.toggle('on',MIRROR);
+});
+document.getElementById('sens').addEventListener('input',function(){SENS=parseFloat(this.value);});
+
+// set initial toggle visuals
+if(LITE)document.getElementById('liteTog').classList.add('on'); else document.getElementById('liteTog').classList.remove('on');
+document.getElementById('mirrorTog').classList.add('on');
+
+// pause rendering when hidden (saves battery)
+document.addEventListener('visibilitychange',function(){
+  if(document.hidden){running=false;} 
+  else if(audioCtx&&stream){running=true;lastT=performance.now();loop(performance.now());}
+});
+})();
+</script>
+</body>
+</html>
